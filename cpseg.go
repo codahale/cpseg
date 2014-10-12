@@ -13,10 +13,15 @@ package cpseg
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
+	"errors"
 	"hash"
 	"io"
 	"math/big"
 )
+
+// ErrDecrypt is returned by Decrypt when the message cannot be decrypted.
+var ErrDecrypt = errors.New("message authentication failed")
 
 // Parameters represents the domain parameters for a key. These parameters can
 // be shared across many keys.
@@ -50,7 +55,24 @@ func GenerateKey(priv *PrivateKey, rng io.Reader) (err error) {
 
 // Encrypt encrypts the given message with the given public key.
 func Encrypt(rng io.Reader, pub *PublicKey, msg []byte) (Y, R, A, s *big.Int, err error) {
-	M := new(big.Int).SetBytes(msg)
+	pLen := (pub.P.BitLen() + 7) / 8
+	if len(msg) > pLen-11 {
+		err = errors.New("message too long")
+		return
+	}
+
+	// EM = 0x02 || PS || 0x00 || M
+	em := make([]byte, pLen-1)
+	em[0] = 2
+	ps, mm := em[1:len(em)-len(msg)-1], em[len(em)-len(msg):]
+	err = nonZeroRandomBytes(ps, rng)
+	if err != nil {
+		return
+	}
+	em[len(em)-len(msg)-1] = 0
+	copy(mm, msg)
+
+	M := new(big.Int).SetBytes(em)
 
 	// r ← $ℤp*
 	r, err := rand.Int(rng, pub.P)
@@ -92,7 +114,7 @@ func Encrypt(rng io.Reader, pub *PublicKey, msg []byte) (Y, R, A, s *big.Int, er
 // Decrypt decrypts the given message with the given private key. If the message
 // is not decryptable (i.e., it's been modified or isn't a valid ciphertext), it
 // returns nil.
-func Decrypt(priv *PrivateKey, Y, R, A, s *big.Int) []byte {
+func Decrypt(priv *PrivateKey, Y, R, A, s *big.Int) ([]byte, error) {
 	// R′ = R^x
 	Rprime := new(big.Int).Exp(R, priv.X, priv.P)
 
@@ -119,10 +141,30 @@ func Decrypt(priv *PrivateKey, Y, R, A, s *big.Int) []byte {
 	ARcprime.Mod(ARcprime, priv.P)
 
 	if gs.Cmp(ARc) != 0 || Xs.Cmp(ARcprime) != 0 {
-		return nil
+		return nil, ErrDecrypt
 	}
 
-	return new(big.Int).Div(Y, Rprime).Bytes()
+	em := new(big.Int).Div(Y, Rprime).Bytes()
+	firstByteIsTwo := subtle.ConstantTimeByteEq(em[0], 2)
+
+	// The remainder of the plaintext must be a string of non-zero random
+	// octets, followed by a 0, followed by the message.
+	//   lookingForIndex: 1 iff we are still looking for the zero.
+	//   index: the offset of the first zero byte.
+	var lookingForIndex, index int
+	lookingForIndex = 1
+
+	for i := 1; i < len(em); i++ {
+		equals0 := subtle.ConstantTimeByteEq(em[i], 0)
+		index = subtle.ConstantTimeSelect(lookingForIndex&equals0, i, index)
+		lookingForIndex = subtle.ConstantTimeSelect(equals0, 0, lookingForIndex)
+	}
+
+	if firstByteIsTwo != 1 || lookingForIndex != 0 || index < 9 {
+		return nil, ErrDecrypt
+	}
+	return em[index+1:], nil
+
 }
 
 func hc(alg func() hash.Hash, ints ...*big.Int) *big.Int {
@@ -131,4 +173,23 @@ func hc(alg func() hash.Hash, ints ...*big.Int) *big.Int {
 		_, _ = h.Write(n.Bytes())
 	}
 	return new(big.Int).SetBytes(h.Sum(nil))
+}
+
+// nonZeroRandomBytes fills the given slice with non-zero random octets.
+func nonZeroRandomBytes(s []byte, rand io.Reader) (err error) {
+	_, err = io.ReadFull(rand, s)
+	if err != nil {
+		return
+	}
+
+	for i := 0; i < len(s); i++ {
+		for s[i] == 0 {
+			_, err = io.ReadFull(rand, s[i:i+1])
+			if err != nil {
+				return
+			}
+		}
+	}
+
+	return
 }

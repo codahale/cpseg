@@ -1,16 +1,18 @@
-package cpseg
+package cpseg_test
 
 import (
 	"crypto/rand"
 	"crypto/sha256"
 	"math/big"
 	"testing"
+
+	"github.com/codahale/cpseg"
 )
 
 func TestEncrypt(t *testing.T) {
-	priv := PrivateKey{
-		PublicKey: PublicKey{
-			Parameters: Parameters{
+	priv := cpseg.PrivateKey{
+		PublicKey: cpseg.PublicKey{
+			Parameters: cpseg.Parameters{
 				P:    p,
 				G:    g,
 				Hash: sha256.New,
@@ -18,18 +20,18 @@ func TestEncrypt(t *testing.T) {
 		},
 	}
 
-	if err := GenerateKey(&priv, rand.Reader); err != nil {
+	if err := cpseg.GenerateKey(&priv, rand.Reader); err != nil {
 		t.Fatal(err)
 	}
 
-	Y, R, A, s, err := Encrypt(rand.Reader, &priv.PublicKey, []byte("yay for me"))
+	Y, R, A, s, err := cpseg.Encrypt(rand.Reader, &priv.PublicKey, []byte("yay for me"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	d := Decrypt(&priv, Y, R, A, s)
-	if d == nil {
-		t.Fatal("couldn't decrypt")
+	d, err := cpseg.Decrypt(&priv, Y, R, A, s)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	if string(d) != "yay for me" {
@@ -38,9 +40,9 @@ func TestEncrypt(t *testing.T) {
 }
 
 func TestEncryptBadData(t *testing.T) {
-	priv := PrivateKey{
-		PublicKey: PublicKey{
-			Parameters: Parameters{
+	priv := cpseg.PrivateKey{
+		PublicKey: cpseg.PublicKey{
+			Parameters: cpseg.Parameters{
 				P:    p,
 				G:    g,
 				Hash: sha256.New,
@@ -48,17 +50,20 @@ func TestEncryptBadData(t *testing.T) {
 		},
 	}
 
-	if err := GenerateKey(&priv, rand.Reader); err != nil {
+	if err := cpseg.GenerateKey(&priv, rand.Reader); err != nil {
 		t.Fatal(err)
 	}
 
-	Y, R, A, s, err := Encrypt(rand.Reader, &priv.PublicKey, []byte("yay for me"))
+	Y, R, A, s, err := cpseg.Encrypt(rand.Reader, &priv.PublicKey, []byte("yay for me"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	Y.Add(Y, big.NewInt(1))
 
-	d := Decrypt(&priv, Y, R, A, s)
+	d, err := cpseg.Decrypt(&priv, Y, R, A, s)
+	if err != cpseg.ErrDecrypt {
+		t.Fatalf("Unexpected error: %v", err)
+	}
 	if d != nil {
 		t.Errorf("Unexpected plaintext: %v", d)
 	}
