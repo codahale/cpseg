@@ -172,7 +172,9 @@ func hc(alg func() hash.Hash, ints ...*big.Int) *big.Int {
 	for _, n := range ints {
 		_, _ = h.Write(n.Bytes())
 	}
-	return new(big.Int).SetBytes(h.Sum(nil))
+	c := new(big.Int).SetBytes(h.Sum(nil))
+	c = c.Abs(c)
+	return c
 }
 
 // nonZeroRandomBytes fills the given slice with non-zero random octets.
